@@ -1,18 +1,24 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-# --- FIX: Set Backend BEFORE importing pyplot ---
+import joblib
+import os
+
+# --- Interactive 3D Plotting Library ---
+import plotly.graph_objects as go
+
+# --- Matplotlib for 2D Plots ---
 import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-# ------------------------------------------------
+
+# --- MISSING IMPORTS ADDED HERE (SCIKIT-LEARN) ---
+from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler  # NEW: For data normalization
-import joblib
-import os
+
+# ------------------------------------------------
 
 # Define the new accent color
 ACCENT_BLUE = "#4a90e2"  # A pleasant, medium blue
@@ -121,7 +127,8 @@ class RobotArm3DOF:
         r3 = self.l2 * np.cos(t2) + self.l3 * np.cos(t2 + t3)
         x3 = np.cos(t1) * r3
         y3 = np.sin(t1) * r3
-        z3 = self.l1 + self.l2 * np.sin(t2) + self.l3 * np.cos(t2 + t3)
+        # FIX: Changed np.cos(t2 + t3) to np.sin(t2 + t3) to match FK
+        z3 = self.l1 + self.l2 * np.sin(t2) + self.l3 * np.sin(t2 + t3)
 
         return np.array([[x0, x1, x2, x3], [y0, y1, y2, y3], [z0, z1, z2, z3]])
 
@@ -318,6 +325,83 @@ def generate_path(start_joints, end_joints, steps=20):
 # ==========================================
 # 4. PLOTTING FUNCTIONS
 # ==========================================
+
+def plot_robot_structure_plotly(robot, predicted_joints, target_x, target_y, target_z, path_joints, show_trace):
+    """Generates an interactive 3D Plotly figure of the robot arm."""
+
+    # Calculate joint positions (X0, X1, X2, X3; Y0, Y1, Y2, Y3; Z0, Z1, Z2, Z3)
+    final_xyz = robot.get_joint_positions(predicted_joints)
+
+    fig = go.Figure()
+
+    # 1. Plot the Arm Links (Line Trace)
+    fig.add_trace(go.Scatter3d(
+        x=final_xyz[0], y=final_xyz[1], z=final_xyz[2],
+        mode='lines+markers',
+        line=dict(color=ACCENT_BLUE, width=8),
+        marker=dict(size=6, color=ACCENT_BLUE, symbol='circle'),
+        name='Robot Arm'
+    ))
+
+    # 2. Plot the End Effector (J3) Marker
+    fig.add_trace(go.Scatter3d(
+        x=[final_xyz[0, -1]], y=[final_xyz[1, -1]], z=[final_xyz[2, -1]],
+        mode='markers',
+        marker=dict(size=10, color='white', symbol='circle'),
+        name='End Effector',
+        showlegend=False
+    ))
+
+    # 3. Plot the Target Position
+    # FIX: Changed symbol='star' to a valid symbol='diamond' for Scatter3d
+    fig.add_trace(go.Scatter3d(
+        x=[target_x], y=[target_y], z=[target_z],
+        mode='markers',
+        marker=dict(size=15, color='#ff4b4b', symbol='diamond'),
+        name='Target Position'
+    ))
+
+    # 4. Plot the Path Trace (if enabled)
+    if show_trace:
+        trace_x = [robot.forward_kinematics(j)[0] for j in path_joints]
+        trace_y = [robot.forward_kinematics(j)[1] for j in path_joints]
+        trace_z = [robot.forward_kinematics(j)[2] for j in path_joints]
+
+        fig.add_trace(go.Scatter3d(
+            x=trace_x, y=trace_y, z=trace_z,
+            mode='lines',
+            line=dict(color='cyan', width=2, dash='dash'),
+            name='Path Trace'
+        ))
+
+    # 5. Layout and Styling (Dark Theme)
+    limit = 4.5
+
+    # Define scene configuration for axis ranges, colors, and aspect ratio
+    scene_config = dict(
+        xaxis=dict(title='X', range=[-limit, limit], backgroundcolor="#2b3042", gridcolor="#444", showbackground=True,
+                   zerolinecolor="#666"),
+        yaxis=dict(title='Y', range=[-limit, limit], backgroundcolor="#2b3042", gridcolor="#444", showbackground=True,
+                   zerolinecolor="#666"),
+        zaxis=dict(title='Z', range=[0, 6], backgroundcolor="#2b3042", gridcolor="#444", showbackground=True,
+                   zerolinecolor="#666"),
+        aspectmode='cube'  # Ensures equal scaling for interactive 3D rotation
+    )
+
+    fig.update_layout(
+        title_text='Interactive 3D Robot Arm Simulation',
+        height=600,
+        scene=scene_config,
+        paper_bgcolor="#1e2126",  # Background color of the entire figure area
+        plot_bgcolor="#1e2126",  # Background color of the plotting area
+        font=dict(color="white"),
+        margin=dict(l=0, r=0, b=0, t=50),
+        showlegend=True
+    )
+
+    return fig
+
+
 def plot_training_data(positions):
     """Generates 3D scatter plot of the robot's workspace."""
 
@@ -543,61 +627,21 @@ def main():
     col_plot, col_data = st.columns([1.5, 1])
 
     with col_plot:
-        st.subheader("Simulated Arm View (Elbow Down Solution)")
+        st.subheader("Interactive 3D Robot Simulation (Elbow Down Solution)")
 
-        # Reduced figsize for better fit
-        fig = plt.figure(figsize=(6, 5))
-        ax = fig.add_subplot(111, projection='3d')
+        # Generate Plotly figure
+        plotly_fig = plot_robot_structure_plotly(
+            robot,
+            predicted_joints,
+            target_x,
+            target_y,
+            target_z,
+            path_joints,
+            show_trace
+        )
 
-        # --- DARK MODE PLOT STYLING ---
-        # Match Streamlit BG
-        fig.patch.set_facecolor('#1e2126')
-        ax.set_facecolor('#1e2126')
-
-        # Axis Colors (Made White for visibility)
-        ax.xaxis.label.set_color('white')
-        ax.yaxis.label.set_color('white')
-        ax.zaxis.label.set_color('white')
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        ax.tick_params(axis='z', colors='white')
-
-        # Remove panes for cleaner look
-        ax.xaxis.pane.fill = False
-        ax.yaxis.pane.fill = False
-        ax.zaxis.pane.fill = False
-        ax.xaxis.pane.set_edgecolor('gray')
-        ax.yaxis.pane.set_edgecolor('gray')
-        ax.zaxis.pane.set_edgecolor('gray')
-
-        # Draw Robot Structure
-        final_xyz = robot.get_joint_positions(predicted_joints)
-
-        # Links - Changed to ACCENT_BLUE
-        ax.plot(final_xyz[0], final_xyz[1], final_xyz[2],
-                color=ACCENT_BLUE, linewidth=4, marker='o', markersize=6, label='Arm')
-
-        # Target - Changed to RED for high contrast against blue arm
-        ax.scatter(target_x, target_y, target_z, c='#ff4b4b', marker='*', s=200, label='Target')
-
-        # Trace
-        if show_trace:
-            trace_x = [robot.forward_kinematics(j)[0] for j in path_joints]
-            trace_y = [robot.forward_kinematics(j)[1] for j in path_joints]
-            trace_z = [robot.forward_kinematics(j)[2] for j in path_joints]
-            ax.plot(trace_x, trace_y, trace_z, color='cyan', linestyle='--', alpha=0.5, linewidth=1)
-
-        # Limits
-        limit = 4.5
-        ax.set_xlim(-limit, limit)
-        ax.set_ylim(-limit, limit)
-        ax.set_zlim(0, 6)
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.grid(True, linestyle=':', alpha=0.3)
-
-        st.pyplot(fig, use_container_width=True)
+        # Render the interactive Plotly figure
+        st.plotly_chart(plotly_fig, use_container_width=True)
 
     with col_data:
         st.subheader("Trajectory Data")
